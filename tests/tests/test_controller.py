@@ -131,7 +131,8 @@ def test():
         if keep_cluster:
             print(f'name_prefix="{name_prefix}"')
         else:
-            destroy.main(
-                name_prefix=name_prefix,
-                datacenter_id=datacenter_id,
+            util.wait_for(
+                "cluster to be destroyed",
+                lambda: destroy.main(name_prefix=name_prefix, datacenter_id=datacenter_id),
+                retry_on_exception=True
             )
