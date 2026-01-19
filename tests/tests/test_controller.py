@@ -133,6 +133,6 @@ def test():
         else:
             util.wait_for(
                 "cluster to be destroyed",
-                lambda: destroy.main(name_prefix=name_prefix, datacenter_id=datacenter_id),
+                lambda: destroy.main(name_prefix=name_prefix, datacenter_id=datacenter_id) or True,
                 retry_on_exception=True
             )
