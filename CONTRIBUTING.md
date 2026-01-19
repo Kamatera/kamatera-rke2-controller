@@ -31,8 +31,7 @@ Run against a cluster using your current `KUBECONFIG`:
 ```bash
 go run ./cmd/controller \
   --metrics-bind-address=0 \
-  --delete-label-key=kamatera.io/delete \
-  --delete-label-value=true
+  --not-ready-duration=15m
 ```
 
 ## Code style

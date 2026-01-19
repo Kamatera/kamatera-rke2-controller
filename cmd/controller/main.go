@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -26,8 +27,7 @@ func main() {
 	var healthProbeAddr string
 	var enableLeaderElection bool
 	var leaderElectionID string
-	var deleteLabelKey string
-	var deleteLabelValue string
+	var notReadyDuration time.Duration
 	var allowControlPlane bool
 
 	zapOpts := zap.Options{Development: false}
@@ -38,8 +38,7 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager.")
 	flag.StringVar(&leaderElectionID, "leader-election-id", "kamatera-rke2-controller.kamatera.io", "Leader election ID to use for the controller manager.")
 
-	flag.StringVar(&deleteLabelKey, "delete-label-key", "kamatera.io/delete", "Node label key that triggers deletion.")
-	flag.StringVar(&deleteLabelValue, "delete-label-value", "true", "Label value that triggers deletion; set to empty to match any value.")
+	flag.DurationVar(&notReadyDuration, "not-ready-duration", 15*time.Minute, "Minimum time a Node must be NotReady before deletion is considered.")
 	flag.BoolVar(&allowControlPlane, "allow-control-plane", false, "Allow deleting nodes labeled as control-plane/master/etcd.")
 
 	flag.Parse()
@@ -47,8 +46,8 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
 	setupLog := ctrl.Log.WithName("setup")
 
-	if deleteLabelKey == "" {
-		setupLog.Error(nil, "--delete-label-key must be non-empty")
+	if notReadyDuration <= 0 {
+		setupLog.Error(nil, "--not-ready-duration must be greater than 0")
 		os.Exit(1)
 	}
 
@@ -68,8 +67,7 @@ func main() {
 
 	if err := (&nodecontroller.NodeReconciler{
 		Client:            mgr.GetClient(),
-		DeleteLabelKey:    deleteLabelKey,
-		DeleteLabelValue:  deleteLabelValue,
+		NotReadyDuration:  notReadyDuration,
 		AllowControlPlane: allowControlPlane,
 		Log:               ctrl.Log.WithName("controllers").WithName("Node"),
 	}).SetupWithManager(mgr); err != nil {

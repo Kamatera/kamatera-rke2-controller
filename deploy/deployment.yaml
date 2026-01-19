@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kamatera-rke2-controller
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kamatera-rke2-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kamatera-rke2-controller
+    spec:
+      serviceAccountName: kamatera-rke2-controller
+      containers:
+        - name: manager
+          image: ghcr.io/kamatera/kamatera-rke2-controller:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --leader-elect
+            - --not-ready-duration=15m
+            - --metrics-bind-address=0
+            - --health-probe-bind-address=:8081
+          ports:
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi

@@ -4,16 +4,16 @@ Kubernetes controller for managing Kamatera RKE2 clusters.
 
 Provides the following functionality:
 
-- **Delete Kubernetes `Node` objects** that match a configured label.
+- **Delete Kubernetes `Node` objects** that have been `NotReady` for longer than a configured duration and whose corresponding Kamatera server is not running.
+  - Note: Kamatera server lookup is currently stubbed (`isKamateraServerRunning`) and defaults to "running".
 
 This repo is intentionally minimal and does **not** perform VM lifecycle actions in Kamatera.
 
 ## Configuration Flags
 
-- `--delete-label-key` (default: `kamatera.io/delete`)
-- `--delete-label-value` (default: `true`) 
-  - Set to empty (`""`) to match any value as long as the key exists.
-- `--allow-control-plane` (default: `false`) 
+- `--not-ready-duration` (default: `15m`)
+  - Minimum time a Node must be `NotReady` before deletion is considered.
+- `--allow-control-plane` (default: `false`)
   - When `false`, the controller refuses to delete Nodes that have a control-plane label/taint.
 
 Controller-runtime flags:
