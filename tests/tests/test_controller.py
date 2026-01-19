@@ -60,6 +60,15 @@ def test():
             lambda: util.kubectl_node_count() == (4, 4),
             progress=lambda: util.kubectl("get", "nodes"),
         )
+        util.wait_for(
+            "worker2 terminated",
+            lambda: destroy.cloudcli("server", "terminate", "--force", "--name", f"{name_prefix}-worker2", "--wait") or True,
+        )
+        util.wait_for(
+            "4 total nodes, 3 ready nodes after worker2 termination",
+            lambda: util.kubectl_node_count() == (4, 3),
+            progress=lambda: util.kubectl("get", "nodes"),
+        )
         util.kubectl(
             "apply", "-f", "rbac.yaml",
             cwd=os.path.join(os.path.dirname(__file__), '..', '..', 'deploy')
@@ -84,19 +93,10 @@ def test():
         rc_args = [
             "../../bin/kamatera-rke2-controller",
             "-kubeconfig", rc_kubeconfig,
-            "-not-ready-duration", "2m",
+            "-not-ready-duration", "3m",
         ]
         print("Starting controller:", " ".join(rc_args))
         rc_p = subprocess.Popen(rc_args, cwd=os.path.dirname(__file__), stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-        util.wait_for(
-            "worker2 terminated",
-            lambda: destroy.cloudcli("server", "terminate", "--force", "--name", f"{name_prefix}-worker2", "--wait") or True,
-        )
-        util.wait_for(
-            "4 total nodes, 3 ready nodes after worker2 termination",
-            lambda: util.kubectl_node_count() == (3, 2),
-            progress=lambda: util.kubectl("get", "nodes"),
-        )
         util.wait_for(
             "3 total nodes, 3 ready nodes after controller deleted unready node",
             lambda: util.kubectl_node_count() == (3, 3),
