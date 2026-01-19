@@ -107,8 +107,8 @@ def test():
             lambda: destroy.cloudcli("server", "poweroff", "--name", f"{name_prefix}-worker1", "--wait") or True,
         )
         util.wait_for(
-            "worker 2 power off",
-            lambda: destroy.cloudcli("server", "poweroff", "--name", f"{name_prefix}-worker2", "--wait") or True,
+            "worker 3 power off",
+            lambda: destroy.cloudcli("server", "poweroff", "--name", f"{name_prefix}-worker3", "--wait") or True,
         )
         util.wait_for(
             "1 ready nodes after controller deleted unready nodes",
