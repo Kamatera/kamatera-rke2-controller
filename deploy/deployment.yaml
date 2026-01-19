@@ -17,28 +17,8 @@ spec:
       containers:
         - name: manager
           image: ghcr.io/kamatera/kamatera-rke2-controller:latest
-          imagePullPolicy: IfNotPresent
           args:
-            - --leader-elect
-            - --not-ready-duration=15m
-            - --metrics-bind-address=0
-            - --health-probe-bind-address=:8081
-          ports:
-            - name: health
-              containerPort: 8081
-              protocol: TCP
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: health
-            initialDelaySeconds: 10
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: health
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            - "-not-ready-duration=15m"
           resources:
             requests:
               cpu: 50m
