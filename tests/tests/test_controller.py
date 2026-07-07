@@ -14,47 +14,45 @@ def test():
     name_prefix = use_existing_name_prefix or setup.generate_name_prefix()
     print(f'name_prefix="{name_prefix}"')
     k8s_version = os.getenv("K8S_VERSION") or "1.35"
-    datacenter_id = "US-NY2"
+    datacenter_id = "EU"
     with_bastion = False
     keep_cluster = os.getenv("KEEP_CLUSTER") == "yes"
-    rc_p = None
-    try:
-        if use_existing_name_prefix:
-            raise NotImplementedError("Reusing existing clusters is not implemented yet")
-        else:
-            setup.main(
-                name_prefix=name_prefix,
-                k8s_version=k8s_version,
-                datacenter_id=datacenter_id,
-                with_bastion=with_bastion,
-                k8s_tfvars_config=None,
-                extra_servers={
-                    "worker1": {
-                        "role": "rke2",
-                        "role_config": {
-                            "rke2_type": "agent"
-                        },
-                        "cpu_cores": 2,
-                        "ram_mb": 4096,
-                    },
-                    "worker2": {
-                        "role": "rke2",
-                        "role_config": {
-                            "rke2_type": "agent"
-                        },
-                        "cpu_cores": 2,
-                        "ram_mb": 4096,
-                    },
-                    "worker3": {
-                        "role": "rke2",
-                        "role_config": {
-                            "rke2_type": "agent"
-                        },
-                        "cpu_cores": 2,
-                        "ram_mb": 4096,
-                    },
+    if use_existing_name_prefix:
+        raise NotImplementedError("Reusing existing clusters is not implemented yet")
+    setup.main(
+        name_prefix=name_prefix,
+        k8s_version=k8s_version,
+        datacenter_id=datacenter_id,
+        with_bastion=with_bastion,
+        k8s_tfvars_config=None,
+        extra_servers={
+            "worker1": {
+                "role": "rke2",
+                "role_config": {
+                    "rke2_type": "agent"
                 },
-            )
+                "cpu_cores": 2,
+                "ram_mb": 4096,
+            },
+            "worker2": {
+                "role": "rke2",
+                "role_config": {
+                    "rke2_type": "agent"
+                },
+                "cpu_cores": 2,
+                "ram_mb": 4096,
+            },
+            "worker3": {
+                "role": "rke2",
+                "role_config": {
+                    "rke2_type": "agent"
+                },
+                "cpu_cores": 2,
+                "ram_mb": 4096,
+            },
+        },
+    )
+    try:
         util.wait_for(
             f"4 total and ready nodes",
             lambda: util.kubectl_node_count() == (4, 4),
@@ -93,41 +91,50 @@ def test():
         rc_args = [
             "../../bin/kamatera-rke2-controller",
             "-kubeconfig", rc_kubeconfig,
-            "-not-ready-duration", "3m",
+            "-match-node-to-server-template", f"{name_prefix}-%s",
+            "-kamatera-server-name-glob", f"{name_prefix}-*",
+            "-kamatera-server-datacenters", datacenter_id,
+            "-not-ready-duration", "2m",
+            "-node-delete-poll-interval", "5s",
+            "-kamatera-server-list-interval", "5s",
+            "-snapshots-log-interval", "1m",
         ]
         print("Starting controller:", " ".join(rc_args))
         rc_p = subprocess.Popen(rc_args, cwd=os.path.dirname(__file__), stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-        util.wait_for(
-            "3 total nodes, 3 ready nodes after controller deleted unready node",
-            lambda: util.kubectl_node_count() == (3, 3),
-            progress=lambda: util.kubectl("get", "nodes"),
-        )
-        util.wait_for(
-            "worker 1 power off",
-            lambda: destroy.cloudcli("server", "poweroff", "--name", f"{name_prefix}-worker1", "--wait") or True,
-        )
-        util.wait_for(
-            "worker 3 power off",
-            lambda: destroy.cloudcli("server", "poweroff", "--name", f"{name_prefix}-worker3", "--wait") or True,
-        )
-        util.wait_for(
-            "1 ready nodes after controller deleted unready nodes",
-            lambda: util.kubectl_node_count() == (1, 1),
-            progress=lambda: util.kubectl("get", "nodes"),
-        )
+        try:
+            util.wait_for(
+                "3 total nodes, 3 ready nodes after controller deleted unready node",
+                lambda: util.kubectl_node_count() == (3, 3),
+                progress=lambda: util.kubectl("get", "nodes"),
+            )
+            util.wait_for(
+                "worker 1 power off",
+                lambda: destroy.cloudcli("server", "poweroff", "--name", f"{name_prefix}-worker1", "--wait") or True,
+            )
+            util.wait_for(
+                "worker 3 power off",
+                lambda: destroy.cloudcli("server", "poweroff", "--name", f"{name_prefix}-worker3", "--wait") or True,
+            )
+            util.wait_for(
+                "1 ready nodes after controller deleted unready nodes",
+                lambda: util.kubectl_node_count() == (1, 1),
+                progress=lambda: util.kubectl("get", "nodes"),
+            )
+        except:
+            if rc_p:
+                rc_p.terminate()
+                rc_p.wait()
+                for line in rc_p.stdout:
+                    print(line.decode().rstrip())
+        else:
+            if rc_p:
+                rc_p.terminate()
+                rc_p.wait()
     except:
-        if rc_p:
-            rc_p.terminate()
-            rc_p.wait()
-            for line in rc_p.stdout:
-                print(line.decode().rstrip())
         util.kubectl("get", "nodes")
         print(f'name_prefix="{name_prefix}"')
         raise
     else:
-        if rc_p:
-            rc_p.terminate()
-            rc_p.wait()
         if keep_cluster:
             print(f'name_prefix="{name_prefix}"')
         else:

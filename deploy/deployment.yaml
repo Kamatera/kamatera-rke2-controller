@@ -1,3 +1,13 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kamatera-rke2-controller
+  namespace: kube-system
+type: Opaque
+data:
+  KAMATERA_API_CLIENT_ID: ""
+  KAMATERA_API_SECRET: ""
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +29,21 @@ spec:
           image: ghcr.io/kamatera/kamatera-rke2-controller:latest
           args:
             - "-not-ready-duration=15m"
+            - "-node-delete-poll-interval=1m"
+            - "-kamatera-server-list-interval=1m"
+            - "-snapshots-log-interval=1m"
+            # - "-match-node-to-server-template=kamatera-%s"
+          env:
+            - name: KAMATERA_API_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: kamatera-rke2-controller
+                  key: KAMATERA_API_CLIENT_ID
+            - name: KAMATERA_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kamatera-rke2-controller
+                  key: KAMATERA_API_SECRET
           resources:
             requests:
               cpu: 50m

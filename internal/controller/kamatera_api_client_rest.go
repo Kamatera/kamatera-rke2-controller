@@ -69,3 +69,47 @@ func (c *KamateraApiClientRest) IsServerRunning(ctx context.Context, name string
 	}
 	return powerState == "on", nil
 }
+
+func (c *KamateraApiClientRest) ListServers(ctx context.Context) ([]KamateraServer, error) {
+	gotErrorMessage, res, err := request(
+		ctx,
+		ProviderConfig{ApiUrl: c.url, ApiClientID: c.clientId, ApiSecret: c.secret},
+		"GET",
+		"/service/servers",
+		nil,
+		c.maxRetries,
+		c.expSecondsBetweenRetries,
+		"No servers found",
+	)
+	if err != nil {
+		return nil, err
+	}
+	if gotErrorMessage {
+		return nil, nil
+	}
+	serverInfoList, ok := res.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid servers list format")
+	}
+	servers := make([]KamateraServer, 0, len(serverInfoList))
+	for _, item := range serverInfoList {
+		serverInfo, ok := item.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid server info format")
+		}
+		name, ok := serverInfo["name"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid server name format")
+		}
+		datacenter, ok := serverInfo["datacenter"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid server datacenter format")
+		}
+		power, ok := serverInfo["power"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid server power format")
+		}
+		servers = append(servers, KamateraServer{Name: name, Datacenter: datacenter, Power: power})
+	}
+	return servers, nil
+}

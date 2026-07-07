@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -10,8 +9,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 const (
@@ -20,7 +17,8 @@ const (
 )
 
 // NodeReconciler deletes Node objects that have been NotReady for longer than
-// NotReadyDuration and whose corresponding Kamatera server is not running.
+// NotReadyDuration and whose matching Kamatera server is present in the
+// snapshot with power=off.
 //
 // The reconciler is intentionally minimal: it does not cordon/drain, and it
 // refuses to delete control-plane nodes unless AllowControlPlane is set.
@@ -38,12 +36,15 @@ type NodeReconciler struct {
 
 	Log logr.Logger
 
-	kamateraAPIClient kamateraAPIClient
+	ServerStore *ServerStateStore
+	Matcher     NameMatcher
+
+	ExtraLogValues []interface{}
 }
 
 // Reconcile implements the reconciliation loop for Node objects.
 // it deletes Nodes that have been NotReady for longer than NotReadyDuration
-// and whose corresponding Kamatera server is not running.
+// and whose matching Kamatera server is present in the snapshot with power=off.
 func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := r.Log.WithValues("node", req.Name)
 
@@ -59,7 +60,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	// Skip control-plane nodes if not allowed.
 	if !r.AllowControlPlane && isControlPlaneNode(&node) {
-		logger.Info("skipping deletion of control-plane node")
+		logger.V(2).Info("skipping deletion of control-plane node", r.ExtraLogValues...)
 		return ctrl.Result{}, nil
 	}
 
@@ -79,35 +80,33 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		serverRunningRecheckInterval = defaultServerRunningRecheckInterval
 	}
 
-	// could not get ready condition, nothing to do
 	readyCondition := nodeReadyCondition(&node)
-	if readyCondition == nil {
+	if readyCondition != nil && readyCondition.Status == corev1.ConditionTrue {
 		return ctrl.Result{}, nil
 	}
 
-	// node is ready, nothing to do
-	if readyCondition.Status == corev1.ConditionTrue {
-		return ctrl.Result{}, nil
-	}
-
-	notReadySince := readyCondition.LastTransitionTime.Time
-	if notReadySince.IsZero() {
-		notReadySince = now
-	}
-
+	notReadySince := nodeNotReadySince(&node, readyCondition, now)
 	notReadyFor := now.Sub(notReadySince)
+	if notReadyFor < 0 {
+		notReadyFor = 0
+	}
 	if notReadyFor < notReadyDuration {
 		requeueAfter := notReadyDuration - notReadyFor
-		logger.V(1).Info("node not ready yet", "notReadyFor", notReadyFor, "requeueAfter", requeueAfter)
+		logger.V(1).Info("node not ready yet", append(r.ExtraLogValues, "notReadyFor", notReadyFor, "requeueAfter", requeueAfter)...)
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
-	isServerRunning, err := r.kamateraAPIClient.IsServerRunning(ctx, node.Name)
-	if err != nil {
-		return ctrl.Result{}, err
+	if r.ServerStore == nil {
+		logger.Info("node is NotReady but Kamatera server snapshot is unavailable", r.ExtraLogValues...)
+		return ctrl.Result{RequeueAfter: serverRunningRecheckInterval}, nil
 	}
-	if isServerRunning {
-		logger.V(1).Info("node is NotReady but Kamatera server is still running")
+	server, ok := r.Matcher.FindServerForNode(node.Name, r.ServerStore)
+	if !ok {
+		logger.Info("node is NotReady but matching Kamatera server is absent from snapshot", r.ExtraLogValues...)
+		return ctrl.Result{RequeueAfter: serverRunningRecheckInterval}, nil
+	}
+	if server.Power != "off" {
+		logger.V(1).Info("node is NotReady but Kamatera server is not powered off", append(r.ExtraLogValues, "power", server.Power)...)
 		return ctrl.Result{RequeueAfter: serverRunningRecheckInterval}, nil
 	}
 
@@ -120,10 +119,22 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	logger.Info(
 		"deleted node due to NotReady timeout and stopped Kamatera server",
-		"notReadyFor", notReadyFor,
-		"name", node.Name,
+		append(r.ExtraLogValues, "notReadyFor", notReadyFor, "name", node.Name)...,
 	)
 	return ctrl.Result{}, nil
+}
+
+func nodeNotReadySince(node *corev1.Node, readyCondition *corev1.NodeCondition, now time.Time) time.Time {
+	if readyCondition != nil {
+		notReadySince := readyCondition.LastTransitionTime.Time
+		if !notReadySince.IsZero() {
+			return notReadySince
+		}
+	}
+	if node != nil && !node.CreationTimestamp.IsZero() {
+		return node.CreationTimestamp.Time
+	}
+	return now
 }
 
 func nodeReadyCondition(node *corev1.Node) *corev1.NodeCondition {
@@ -180,58 +191,4 @@ func isControlPlaneNode(node *corev1.Node) bool {
 	}
 
 	return false
-}
-
-// shouldReconcile determines whether the given object should trigger a reconciliation.
-// It returns true if the object is a Node that is not being deleted and is NotReady.
-func (r *NodeReconciler) shouldReconcile(obj client.Object) bool {
-	node, ok := obj.(*corev1.Node)
-	if !ok {
-		return false
-	}
-	if node.DeletionTimestamp != nil {
-		return false
-	}
-
-	readyCondition := nodeReadyCondition(node)
-	if readyCondition == nil {
-		return false
-	}
-
-	return readyCondition.Status != corev1.ConditionTrue
-}
-
-func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if r.Log.GetSink() == nil {
-		r.Log = ctrl.Log.WithName("controllers").WithName("Node")
-	}
-
-	kamateraApiUrl := os.Getenv("KAMATERA_API_URL")
-	if kamateraApiUrl == "" {
-		kamateraApiUrl = "https://cloudcli.cloudwm.com"
-	}
-	r.kamateraAPIClient = buildKamateraAPIClient(
-		os.Getenv("KAMATERA_API_CLIENT_ID"),
-		os.Getenv("KAMATERA_API_SECRET"),
-		kamateraApiUrl,
-	)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Node{}).
-		WithEventFilter(predicate.Funcs{
-			CreateFunc: func(e event.CreateEvent) bool {
-				return r.shouldReconcile(e.Object)
-			},
-			UpdateFunc: func(e event.UpdateEvent) bool {
-				// Reconcile if the Node's Ready status has changed.
-				return nodeReadyStatus(e.ObjectNew) != nodeReadyStatus(e.ObjectOld)
-			},
-			DeleteFunc: func(_ event.DeleteEvent) bool {
-				return false
-			},
-			GenericFunc: func(e event.GenericEvent) bool {
-				return r.shouldReconcile(e.Object)
-			},
-		}).
-		Complete(r)
 }

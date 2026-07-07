@@ -113,18 +113,123 @@ func TestNodeReconciler_DeletesWhenNotReadyTooLongAndServerNotRunning(t *testing
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
 
-	kclient := kamateraClientMock{}
-	kclient.On("IsServerRunning", context.Background(), node.Name).Return(false, nil)
+	serverStore := NewServerStateStore()
+	serverStore.Replace([]KamateraServer{{Name: node.Name, Datacenter: "EU", Power: "off"}})
 
 	r := &NodeReconciler{
-		Client:            c,
-		NotReadyDuration:  15 * time.Minute,
-		Now:               func() time.Time { return now },
-		Log:               logr.Discard(),
-		kamateraAPIClient: &kclient,
+		Client:           c,
+		NotReadyDuration: 15 * time.Minute,
+		Now:              func() time.Time { return now },
+		Log:              logr.Discard(),
+		ServerStore:      serverStore,
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got corev1.Node
+	err = c.Get(context.Background(), types.NamespacedName{Name: node.Name}, &got)
+	if err == nil || !apierrors.IsNotFound(err) {
+		t.Fatalf("expected node to be deleted, got err=%v", err)
+	}
+}
+
+func TestNodeReconciler_DeletesWhenReadyConditionUnknownTooLongAndServerNotRunning(t *testing.T) {
+	scheme := newTestScheme(t)
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	node := &corev1.Node{}
+	node.Name = "node-1"
+	node.Status.Conditions = []corev1.NodeCondition{{
+		Type:               corev1.NodeReady,
+		Status:             corev1.ConditionUnknown,
+		LastTransitionTime: metav1.NewTime(now.Add(-20 * time.Minute)),
+	}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
+	serverStore := NewServerStateStore()
+	serverStore.Replace([]KamateraServer{{Name: node.Name, Datacenter: "EU", Power: "off"}})
+
+	r := &NodeReconciler{
+		Client:           c,
+		NotReadyDuration: 15 * time.Minute,
+		Now:              func() time.Time { return now },
+		Log:              logr.Discard(),
+		ServerStore:      serverStore,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got corev1.Node
+	err = c.Get(context.Background(), types.NamespacedName{Name: node.Name}, &got)
+	if err == nil || !apierrors.IsNotFound(err) {
+		t.Fatalf("expected Unknown node to be deleted, got err=%v", err)
+	}
+}
+
+func TestNodeReconciler_DeletesWhenReadyConditionMissingAndServerNotRunning(t *testing.T) {
+	scheme := newTestScheme(t)
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	node := &corev1.Node{}
+	node.Name = "node-1"
+	node.CreationTimestamp = metav1.NewTime(now.Add(-20 * time.Minute))
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
+	serverStore := NewServerStateStore()
+	serverStore.Replace([]KamateraServer{{Name: node.Name, Datacenter: "EU", Power: "off"}})
+
+	r := &NodeReconciler{
+		Client:           c,
+		NotReadyDuration: 15 * time.Minute,
+		Now:              func() time.Time { return now },
+		Log:              logr.Discard(),
+		ServerStore:      serverStore,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got corev1.Node
+	err = c.Get(context.Background(), types.NamespacedName{Name: node.Name}, &got)
+	if err == nil || !apierrors.IsNotFound(err) {
+		t.Fatalf("expected node with missing Ready condition to be deleted, got err=%v", err)
+	}
+}
+
+func TestNodeReconciler_DeletesWhenMatchedServerNameUsesNodeToServerTemplate(t *testing.T) {
+	scheme := newTestScheme(t)
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	node := &corev1.Node{}
+	node.Name = "worker1"
+	node.Status.Conditions = []corev1.NodeCondition{{
+		Type:               corev1.NodeReady,
+		Status:             corev1.ConditionFalse,
+		LastTransitionTime: metav1.NewTime(now.Add(-20 * time.Minute)),
+	}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
+
+	serverStore := NewServerStateStore()
+	serverStore.Replace([]KamateraServer{{Name: "kamatera-worker1", Datacenter: "EU", Power: "off"}})
+	matcher, err := NewNameMatcher("kamatera-%s", "")
+	if err != nil {
+		t.Fatalf("new matcher: %v", err)
+	}
+
+	r := &NodeReconciler{
+		Client:           c,
+		NotReadyDuration: 15 * time.Minute,
+		Now:              func() time.Time { return now },
+		Log:              logr.Discard(),
+		ServerStore:      serverStore,
+		Matcher:          matcher,
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -151,8 +256,8 @@ func TestNodeReconciler_DoesNotDeleteWhenServerRunning(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
 
-	kclient := kamateraClientMock{}
-	kclient.On("IsServerRunning", context.Background(), node.Name).Return(true, nil)
+	serverStore := NewServerStateStore()
+	serverStore.Replace([]KamateraServer{{Name: node.Name, Datacenter: "EU", Power: "on"}})
 
 	r := &NodeReconciler{
 		Client:                       c,
@@ -160,7 +265,7 @@ func TestNodeReconciler_DoesNotDeleteWhenServerRunning(t *testing.T) {
 		ServerRunningRecheckInterval: 3 * time.Minute,
 		Now:                          func() time.Time { return now },
 		Log:                          logr.Discard(),
-		kamateraAPIClient:            &kclient,
+		ServerStore:                  serverStore,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
@@ -171,6 +276,39 @@ func TestNodeReconciler_DoesNotDeleteWhenServerRunning(t *testing.T) {
 		t.Fatalf("expected requeue after 3m, got %v", res.RequeueAfter)
 	}
 
+	var got corev1.Node
+	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name}, &got); err != nil {
+		t.Fatalf("expected node to still exist: %v", err)
+	}
+}
+
+func TestNodeReconciler_DoesNotDeleteWhenServerAbsentFromSnapshot(t *testing.T) {
+	scheme := newTestScheme(t)
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	node := &corev1.Node{}
+	node.Name = "node-1"
+	node.Status.Conditions = []corev1.NodeCondition{{
+		Type:               corev1.NodeReady,
+		Status:             corev1.ConditionFalse,
+		LastTransitionTime: metav1.NewTime(now.Add(-20 * time.Minute)),
+	}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
+	r := &NodeReconciler{
+		Client:                       c,
+		NotReadyDuration:             15 * time.Minute,
+		ServerRunningRecheckInterval: 3 * time.Minute,
+		Now:                          func() time.Time { return now },
+		Log:                          logr.Discard(),
+		ServerStore:                  NewServerStateStore(),
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter != 3*time.Minute {
+		t.Fatalf("expected requeue after 3m, got %v", res.RequeueAfter)
+	}
 	var got corev1.Node
 	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name}, &got); err != nil {
 		t.Fatalf("expected node to still exist: %v", err)
