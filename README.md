@@ -8,7 +8,7 @@ Provides the following functionality:
 - **Track Kubernetes Node state** and log node add/delete-request/delete/Ready/unschedulable/tracked-taint/tracked-annotation changes.
 - **Match Kubernetes Nodes to Kamatera servers** with exact names by default, or with configurable one-way name templates.
 - **Log current Node and Kamatera server snapshots** on a configurable interval, combining matched node/server pairs into one log line.
-- **Delete Kubernetes `Node` objects** on a polling interval when they have been anything other than `Ready=True` for longer than a configured duration and their matching Kamatera server is present in the shared snapshot with `power=off`.
+- **Delete Kubernetes `Node` objects** on a polling interval when they have been anything other than `Ready=True` for longer than a configured duration and a server snapshot is available where their matching Kamatera server is absent or has `power=off`.
 
 ## Configuration Flags
 

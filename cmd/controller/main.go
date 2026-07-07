@@ -144,13 +144,17 @@ func main() {
 	}
 
 	if err := mgr.Add(&nodecontroller.NodeDeletePoller{
-		Client:            mgr.GetClient(),
-		ServerStore:       serverStore,
-		Matcher:           matcher,
-		PollInterval:      nodeDeletePollInterval,
-		NotReadyDuration:  notReadyDuration,
-		AllowControlPlane: allowControlPlane,
-		Log:               ctrl.Log.WithName("controllers").WithName("NodeDeletePoller"),
+		NodeStore:    nodeStore,
+		PollInterval: nodeDeletePollInterval,
+		Reconciler: &nodecontroller.NodeReconciler{
+			Client:            mgr.GetClient(),
+			NotReadyDuration:  notReadyDuration,
+			AllowControlPlane: allowControlPlane,
+			Log:               ctrl.Log.WithName("controllers").WithName("NodeDelete"),
+			ServerStore:       serverStore,
+			Matcher:           matcher,
+		},
+		Log: ctrl.Log.WithName("controllers").WithName("NodeDeletePoller"),
 	}); err != nil {
 		setupLog.Error(err, "unable to add controller", "controller", "NodeDeletePoller")
 		os.Exit(1)

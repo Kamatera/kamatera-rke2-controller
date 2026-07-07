@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -18,11 +17,6 @@ type NodeListReconciler struct {
 	Matcher            NameMatcher
 	TrackedTaints      map[string]struct{}
 	TrackedAnnotations map[string]struct{}
-
-	NotReadyDuration             time.Duration
-	ServerRunningRecheckInterval time.Duration
-	AllowControlPlane            bool
-	Now                          func() time.Time
 
 	Log logr.Logger
 }

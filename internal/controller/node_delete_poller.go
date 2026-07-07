@@ -5,23 +5,17 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const defaultNodeDeletePollInterval = time.Minute
 
 type NodeDeletePoller struct {
-	client.Client
-	ServerStore *ServerStateStore
-	Matcher     NameMatcher
+	NodeStore  *NodeStateStore
+	Reconciler *NodeReconciler
 
-	PollInterval                 time.Duration
-	NotReadyDuration             time.Duration
-	ServerRunningRecheckInterval time.Duration
-	AllowControlPlane            bool
-	Now                          func() time.Time
+	PollInterval time.Duration
 
 	Log logr.Logger
 }
@@ -56,22 +50,16 @@ func (p *NodeDeletePoller) interval() time.Duration {
 }
 
 func (p *NodeDeletePoller) poll(ctx context.Context) error {
-	var nodes corev1.NodeList
-	if err := p.List(ctx, &nodes); err != nil {
-		return err
+	if p.NodeStore == nil {
+		p.Log.Info("skipping node deletion poll because node snapshot store is unavailable")
+		return nil
 	}
-	for i := range nodes.Items {
-		_, err := (&NodeReconciler{
-			Client:                       p.Client,
-			NotReadyDuration:             p.NotReadyDuration,
-			ServerRunningRecheckInterval: p.ServerRunningRecheckInterval,
-			AllowControlPlane:            p.AllowControlPlane,
-			Now:                          p.Now,
-			Log:                          p.Log,
-			ServerStore:                  p.ServerStore,
-			Matcher:                      p.Matcher,
-		}).Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Name: nodes.Items[i].Name}})
-		if err != nil {
+	if p.Reconciler == nil {
+		p.Log.Info("skipping node deletion poll because node reconciler is unavailable")
+		return nil
+	}
+	for _, node := range p.NodeStore.List() {
+		if err := p.Reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}}); err != nil {
 			return err
 		}
 	}

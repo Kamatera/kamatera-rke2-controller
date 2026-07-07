@@ -48,8 +48,7 @@ func TestNodeListReconcilerStoresNodeSnapshot(t *testing.T) {
 		Log:                logr.Discard(),
 	}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
-	if err != nil {
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
@@ -87,8 +86,7 @@ func TestNodeListReconcilerDeletesMissingNodeFromStore(t *testing.T) {
 	store.Replace(NodeSnapshot{Name: "node-1", Taints: map[string]TrackedTaint{}, Annotations: map[string]string{}})
 
 	r := &NodeListReconciler{Client: c, Store: store, Log: logr.Discard()}
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "node-1"}})
-	if err != nil {
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "node-1"}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if _, ok := store.Delete("node-1"); ok {
@@ -181,28 +179,24 @@ func TestNodeListReconcilerDoesNotTriggerDeleteForMatchedPoweredOffServer(t *tes
 	}
 
 	r := &NodeListReconciler{
-		Client:           c,
-		Store:            NewNodeStateStore(),
-		ServerStore:      serverStore,
-		Matcher:          matcher,
-		NotReadyDuration: 15 * time.Minute,
-		Now:              func() time.Time { return now },
-		Log:              logr.Discard(),
+		Client:      c,
+		Store:       NewNodeStateStore(),
+		ServerStore: serverStore,
+		Matcher:     matcher,
+		Log:         logr.Discard(),
 	}
 
-	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
-	if err != nil {
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	var got corev1.Node
-	err = c.Get(context.Background(), types.NamespacedName{Name: node.Name}, &got)
-	if err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name}, &got); err != nil {
 		t.Fatalf("expected node list reconcile not to delete node: %v", err)
 	}
 }
 
-func TestNodeListReconcilerDoesNotRequeueDeleteWhenNoServerMatchExists(t *testing.T) {
+func TestNodeListReconcilerDoesNotTriggerDeleteWhenNoServerMatchExists(t *testing.T) {
 	scheme := newTestScheme(t)
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker1"}}
@@ -213,20 +207,18 @@ func TestNodeListReconcilerDoesNotRequeueDeleteWhenNoServerMatchExists(t *testin
 	}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
 	r := &NodeListReconciler{
-		Client:                       c,
-		Store:                        NewNodeStateStore(),
-		ServerStore:                  NewServerStateStore(),
-		ServerRunningRecheckInterval: 3 * time.Minute,
-		NotReadyDuration:             15 * time.Minute,
-		Now:                          func() time.Time { return now },
-		Log:                          logr.Discard(),
+		Client:      c,
+		Store:       NewNodeStateStore(),
+		ServerStore: NewServerStateStore(),
+		Log:         logr.Discard(),
 	}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}})
-	if err != nil {
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if res.RequeueAfter != 0 {
-		t.Fatalf("expected node list reconcile not to schedule delete requeue, got %v", res.RequeueAfter)
+
+	var got corev1.Node
+	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name}, &got); err != nil {
+		t.Fatalf("expected node list reconcile not to delete node: %v", err)
 	}
 }

@@ -12,13 +12,12 @@ import (
 )
 
 const (
-	defaultNotReadyDuration             = 15 * time.Minute
-	defaultServerRunningRecheckInterval = 5 * time.Minute
+	defaultNotReadyDuration = 15 * time.Minute
 )
 
 // NodeReconciler deletes Node objects that have been NotReady for longer than
-// NotReadyDuration and whose matching Kamatera server is present in the
-// snapshot with power=off.
+// NotReadyDuration when a server snapshot is available and the matching
+// Kamatera server is absent from the snapshot or present with power=off.
 //
 // The reconciler is intentionally minimal: it does not cordon/drain, and it
 // refuses to delete control-plane nodes unless AllowControlPlane is set.
@@ -27,8 +26,7 @@ const (
 type NodeReconciler struct {
 	client.Client
 
-	NotReadyDuration             time.Duration
-	ServerRunningRecheckInterval time.Duration
+	NotReadyDuration time.Duration
 
 	AllowControlPlane bool
 
@@ -44,24 +42,24 @@ type NodeReconciler struct {
 
 // Reconcile implements the reconciliation loop for Node objects.
 // it deletes Nodes that have been NotReady for longer than NotReadyDuration
-// and whose matching Kamatera server is present in the snapshot with power=off.
-func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// and whose matching Kamatera server is absent or not running.
+func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) error {
 	logger := r.Log.WithValues("node", req.Name)
 
 	var node corev1.Node
 	if err := r.Get(ctx, req.NamespacedName, &node); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		return client.IgnoreNotFound(err)
 	}
 
 	// Skip if the Node is being deleted.
 	if node.DeletionTimestamp != nil {
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	// Skip control-plane nodes if not allowed.
 	if !r.AllowControlPlane && isControlPlaneNode(&node) {
 		logger.V(2).Info("skipping deletion of control-plane node", r.ExtraLogValues...)
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	// Determine current time, for testing
@@ -75,14 +73,9 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		notReadyDuration = defaultNotReadyDuration
 	}
 
-	serverRunningRecheckInterval := r.ServerRunningRecheckInterval
-	if serverRunningRecheckInterval <= 0 {
-		serverRunningRecheckInterval = defaultServerRunningRecheckInterval
-	}
-
 	readyCondition := nodeReadyCondition(&node)
 	if readyCondition != nil && readyCondition.Status == corev1.ConditionTrue {
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	notReadySince := nodeNotReadySince(&node, readyCondition, now)
@@ -91,37 +84,36 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		notReadyFor = 0
 	}
 	if notReadyFor < notReadyDuration {
-		requeueAfter := notReadyDuration - notReadyFor
-		logger.V(1).Info("node not ready yet", append(r.ExtraLogValues, "notReadyFor", notReadyFor, "requeueAfter", requeueAfter)...)
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+		logger.V(1).Info("node NotReady duration is below threshold", append(r.ExtraLogValues, "notReadyFor", notReadyFor)...)
+		return nil
 	}
 
 	if r.ServerStore == nil {
 		logger.Info("node is NotReady but Kamatera server snapshot is unavailable", r.ExtraLogValues...)
-		return ctrl.Result{RequeueAfter: serverRunningRecheckInterval}, nil
+		return nil
 	}
 	server, ok := r.Matcher.FindServerForNode(node.Name, r.ServerStore)
-	if !ok {
-		logger.Info("node is NotReady but matching Kamatera server is absent from snapshot", r.ExtraLogValues...)
-		return ctrl.Result{RequeueAfter: serverRunningRecheckInterval}, nil
-	}
-	if server.Power != "off" {
-		logger.V(1).Info("node is NotReady but Kamatera server is not powered off", append(r.ExtraLogValues, "power", server.Power)...)
-		return ctrl.Result{RequeueAfter: serverRunningRecheckInterval}, nil
+	serverState := "unknown"
+	if ok {
+		if server.Power != "off" {
+			logger.V(1).Info("node is NotReady but Kamatera server is not powered off", append(r.ExtraLogValues, "power", server.Power)...)
+			return nil
+		}
+		serverState = "powered off"
 	}
 
 	if err := r.Delete(ctx, &node); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return nil
 		}
-		return ctrl.Result{}, err
+		return err
 	}
 
 	logger.Info(
-		"deleted node due to NotReady timeout and stopped Kamatera server",
+		"deleted node due to NotReady timeout and Kamatera server "+serverState,
 		append(r.ExtraLogValues, "notReadyFor", notReadyFor, "name", node.Name)...,
 	)
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func nodeNotReadySince(node *corev1.Node, readyCondition *corev1.NodeCondition, now time.Time) time.Time {
